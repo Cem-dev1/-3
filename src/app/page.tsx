@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect } from 'react'
 import { 
   Calendar, Coins, Home, Ticket, Smartphone, BookOpen, Plus, 
   CheckCircle2, Send, Sparkles, LogOut, Bell, ShoppingBag, 
@@ -28,9 +28,6 @@ export default function HomePage() {
 
   const [duration, setDuration] = useState({ days: 0, hours: 0, minutes: 0, seconds: 0 })
   const [coins, setCoins] = useState(15)
-
-  const [isVibrating, setIsVibrating] = useState(false)
-  const pressTimer = useRef<any>(null)
 
   const [coupons, setCoupons] = useState<any[]>([])
   const [shopTab, setShopTab] = useState<'daily' | 'weekly'>('daily')
@@ -62,7 +59,6 @@ export default function HomePage() {
       const { data: { session } } = await supabase.auth.getSession()
       if (session?.user) {
         setUser(session.user)
-        // Davet kodu olarak kullanıcı ID'sinin ilk 8 hanesini kullanıyoruz
         setInviteCode(session.user.id.slice(0, 8))
         await fetchUserProfile(session.user.id)
       } else {
@@ -93,7 +89,6 @@ export default function HomePage() {
     let { data: profile } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle()
     
     if (!profile) {
-      // Profil yoksa oluştur
       const { data: newProfile } = await supabase.from('profiles').insert([{ id: userId, coins: 15, couple_id: null }]).select().single()
       profile = newProfile
     }
@@ -103,7 +98,6 @@ export default function HomePage() {
       if (profile.couple_id) {
         setCoupleId(profile.couple_id)
         setIsPaired(true)
-        // Eğer bir ortak ilişki tablosu varsa başlangıç tarihini çek
         const { data: coupleData } = await supabase.from('couples').select('created_at').eq('id', profile.couple_id).maybeSingle()
         if (coupleData?.created_at) {
           setStartedAt(coupleData.created_at)
@@ -123,20 +117,19 @@ export default function HomePage() {
     await supabase.auth.signOut()
   }
 
-  // GERÇEK EŞLEŞME MANİFESTOSU (KOD İLE EŞLEŞME)
+  // KOD İLE EŞLEŞME
   const handlePairWithCode = async (e: React.FormEvent) => {
     e.preventDefault()
     const code = inputInviteCode.trim()
     if (!code) return
 
-    // Karşı tarafın ID'sini bulmak için profiles tablosunda id'si bu kod ile başlayan kullanıcıyı arıyoruz
     const { data: targetUsers, error } = await supabase
       .from('profiles')
       .select('id, couple_id')
       .ilike('id', `${code}%`)
 
     if (error || !targetUsers || targetUsers.length === 0) {
-      alert('Bu kodla eşleşen kullanıcı bulunamadı! Lütfen sevgilinin tam kodunu kontrol et.')
+      alert('Bu kodla eşleşen kullanıcı bulunamadı! Lütfen tam davet kodunu kontrol et.')
       return
     }
 
@@ -146,10 +139,8 @@ export default function HomePage() {
       return
     }
 
-    // Ortak bir couple_id oluşturalım (ikisinin ID birleşimi)
     const sharedCoupleId = [user.id, targetUser.id].sort().join('_')
 
-    // 1. Couples tablosuna kayıt at
     await supabase.from('couples').upsert([{
       id: sharedCoupleId,
       user1_id: user.id,
@@ -157,7 +148,6 @@ export default function HomePage() {
       created_at: new Date().toISOString()
     }])
 
-    // 2. Her iki kullanıcının da profilini bu couple_id ile güncelle ve +15 ödül ekle
     await supabase.from('profiles').update({ couple_id: sharedCoupleId, coins: coins + 15 }).eq('id', user.id)
     await supabase.from('profiles').update({ couple_id: sharedCoupleId }).eq('id', targetUser.id)
 
@@ -166,12 +156,12 @@ export default function HomePage() {
     setCoins(prev => prev + 15)
     
     addNotification('Tebrikler! Sevgilinle başarıyla eşleştiniz ve +15 Altın kazandınız! 💕')
-    alert('Harika! Sevgilinle başarıyla eşleştiniz! 💕')
+    alert('Harika! Aysel ile başarıyla eşleştiniz! 💕')
   }
 
   const copyInviteLink = () => {
     navigator.clipboard.writeText(inviteCode)
-    alert('Davet kodun kopyalandı! Sevgiline gönder 💌')
+    alert('Davet kodun kopyalandı! Aysel\'e gönderebilirsin 💌')
   }
 
   // SAYAÇ
@@ -233,19 +223,6 @@ export default function HomePage() {
     setNotifications((prev) => [{ id: Date.now(), text, time: 'Şimdi' }, ...prev])
   }
 
-  const handlePressStart = () => {
-    pressTimer.current = setTimeout(() => {
-      setIsVibrating(true)
-      if (navigator.vibrate) navigator.vibrate([100, 50, 100, 50, 200])
-      addNotification('Sevgiline kalpten titreşim gönderildi! 💓')
-      setTimeout(() => setIsVibrating(false), 1500)
-    }, 500)
-  }
-
-  const handlePressEnd = () => {
-    if (pressTimer.current) clearTimeout(pressTimer.current)
-  }
-
   const handleAddCoupon = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newCouponTitle.trim() || !coupleId) return
@@ -266,6 +243,9 @@ export default function HomePage() {
     const newStatus = currentStatus === 'available' ? 'redeemed' : 'available'
     await supabase.from('coupons').update({ status: newStatus }).eq('id', id)
     setCoupons((prev) => prev.map((c) => (c.id === id ? { ...c, status: newStatus } : c)))
+    if (newStatus === 'redeemed') {
+      addNotification('Kupon kullanıldı! 💕')
+    }
   }
 
   const handleUpdateWidget = async (e: React.FormEvent) => {
@@ -345,7 +325,7 @@ export default function HomePage() {
           <div className="w-14 h-14 bg-pink-100 text-pink-500 rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-inner">
             <Users size={28} />
           </div>
-          <h2 className="text-xl font-bold text-gray-800 mb-1">Sevgilinle Eşleş 💕</h2>
+          <h2 className="text-xl font-bold text-gray-800 mb-1">Aysel ile Eşleş 💕</h2>
           <p className="text-xs text-gray-500 mb-4">Eşleştiğiniz an **+15 Altın** kazanacaksınız!</p>
 
           <div className="bg-pink-50 p-3 rounded-2xl border border-pink-100 mb-4">
@@ -367,7 +347,7 @@ export default function HomePage() {
           <form onSubmit={handlePairWithCode} className="space-y-3">
             <input
               type="text"
-              placeholder="Sevgilinin Kodunu Yapıştır..."
+              placeholder="Aysel'in Kodunu Yapıştır..."
               value={inputInviteCode}
               onChange={(e) => setInputInviteCode(e.target.value)}
               className="w-full bg-gray-50 px-3 py-2.5 rounded-xl text-sm border border-gray-200 outline-none focus:border-pink-300 text-center font-mono"
@@ -389,7 +369,7 @@ export default function HomePage() {
   }
 
   return (
-    <div className={`min-h-screen bg-gradient-to-br from-pink-50 via-red-50 to-purple-100 text-gray-800 flex flex-col items-center p-4 relative ${isVibrating ? 'animate-bounce' : ''}`}>
+    <div className="min-h-screen bg-gradient-to-br from-pink-50 via-red-50 to-purple-100 text-gray-800 flex flex-col items-center p-4 relative">
       
       {/* HEADER */}
       <header className="w-full max-w-md bg-white/80 backdrop-blur-md rounded-2xl p-3 px-4 shadow-sm border border-pink-100 flex items-center justify-between mb-4 relative z-40">
@@ -441,29 +421,47 @@ export default function HomePage() {
       {/* ANA İÇERİK */}
       <main className="w-full max-w-md flex-1 bg-white rounded-3xl shadow-lg border border-pink-100 p-5 mb-20 flex flex-col relative overflow-hidden">
         
-        {/* ORTAK ODA */}
+        {/* YENİ ROMANTİK ORTAK ODA (CEM <3 AYSEL) */}
         {activeTab === 'room' && (
           <div className="flex-1 flex flex-col items-center justify-center text-center p-2">
-            <p className="text-[11px] text-pink-500 font-bold mb-2 uppercase tracking-wider">Sevgilini Titretmek İçin Basılı Tut 👇</p>
             
-            <div 
-              onMouseDown={handlePressStart}
-              onMouseUp={handlePressEnd}
-              onTouchStart={handlePressStart}
-              onTouchEnd={handlePressEnd}
-              className={`w-28 h-28 bg-gradient-to-tr from-pink-500 to-rose-400 rounded-full flex flex-col items-center justify-center text-white shadow-xl cursor-pointer select-none transition transform active:scale-90 mb-6 ${isVibrating ? 'animate-ping' : 'hover:scale-105'}`}
-            >
-              <Heart size={44} className="fill-white animate-pulse" />
-              <span className="text-[9px] font-bold mt-1">DÜRT / TİTRET</span>
+            {/* İKİ DURAN YUVARLAK VE ORTADA ATAN KALP */}
+            <div className="flex items-center justify-center gap-4 my-6">
+              
+              {/* CEM YUVARLAĞI */}
+              <div className="flex flex-col items-center gap-1.5">
+                <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-blue-500 to-indigo-400 flex items-center justify-center text-white text-2xl font-extrabold shadow-lg border-4 border-white">
+                  C
+                </div>
+                <span className="text-xs font-bold text-gray-700">Cem</span>
+              </div>
+
+              {/* ORTADAKİ ATAN KALP */}
+              <div className="flex flex-col items-center justify-center">
+                <div className="w-10 h-10 bg-pink-100 text-pink-500 rounded-full flex items-center justify-center shadow-inner">
+                  <Heart size={22} className="fill-pink-500 animate-pulse text-pink-500" />
+                </div>
+              </div>
+
+              {/* AYSEL YUVARLAĞI */}
+              <div className="flex flex-col items-center gap-1.5">
+                <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-pink-500 to-rose-400 flex items-center justify-center text-white text-2xl font-extrabold shadow-lg border-4 border-white">
+                  A
+                </div>
+                <span className="text-xs font-bold text-gray-700">Aysel</span>
+              </div>
+
             </div>
 
-            <h2 className="font-bold text-lg text-gray-700 mb-1">Ortak Oda 🏡</h2>
-            <p className="text-xs text-gray-400 max-w-xs mb-4">Kalbe basılı tutarak sevgilinin telefonunu titretebilirsin!</p>
-            
-            <div className="w-full bg-pink-50 border border-pink-100 rounded-2xl p-3.5 text-left space-y-2">
+            <h2 className="font-extrabold text-2xl text-gray-800 mb-1 flex items-center gap-1">
+              Cem <Heart size={20} className="fill-rose-500 text-rose-500 inline" /> Aysel
+            </h2>
+            <p className="text-xs text-gray-400 max-w-xs mb-6">Sonsuz ve Özel Aşk Alanı</p>
+
+            <div className="w-full bg-pink-50/80 border border-pink-100 rounded-2xl p-4 text-left space-y-2.5">
               <div className="flex justify-between text-xs"><span className="text-gray-500">Durum:</span><span className="font-bold text-green-600 flex items-center gap-1"><ShieldCheck size={14}/> Eşleşme Aktif</span></div>
-              <div className="flex justify-between text-xs"><span className="text-gray-500">Davet Kodun:</span><span className="font-bold font-mono text-pink-600">{inviteCode}</span></div>
               <div className="flex justify-between text-xs"><span className="text-gray-500">Birlikte Geçen Süre:</span><span className="font-bold text-pink-600">{duration.days} Gün {duration.hours} Sa</span></div>
+              <div className="flex justify-between text-xs"><span className="text-gray-500">Günlük Altın:</span><span className="font-bold text-amber-600">+5 Altın / Gün</span></div>
             </div>
           </div>
         )}
@@ -556,7 +554,7 @@ export default function HomePage() {
         {activeTab === 'widget' && (
           <div className="flex-1 flex flex-col">
             <h2 className="font-bold text-lg text-gray-700 mb-1">Anlık Widget Durumu 📱</h2>
-            <p className="text-xs text-gray-400 mb-4">Sevgilinin telefon ekranındaki mesajı güncelle.</p>
+            <p className="text-xs text-gray-400 mb-4">Aysel'in telefon ekranındaki mesajı güncelle.</p>
             <div className="bg-gradient-to-br from-pink-500 to-rose-400 rounded-3xl p-5 text-white shadow-md mb-6 flex flex-col justify-between h-36">
               <span className="text-xs font-medium uppercase tracking-wider bg-white/20 px-2.5 py-1 rounded-full w-fit">Manitalar Widget</span>
               <div>
