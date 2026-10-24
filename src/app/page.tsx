@@ -6,14 +6,19 @@ import {
   CheckCircle2, Send, Sparkles, LogOut, Bell, ShoppingBag, 
   ShieldCheck, Copy, Users, Heart, Clock
 } from 'lucide-react'
-import { supabase } from '@/lib/supabase'
+import { createClient } from '@supabase/supabase-js'
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
 
 export default function HomePage() {
   const [user, setUser] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
   const [activeTab, setActiveTab] = useState<'room' | 'coupons' | 'widget' | 'memories' | 'shop'>('room')
-  const [startedAt] = useState<string>('2024-10-31T00:00:00')
+  const [startedAt, setStartedAt] = useState<string>('2024-10-31T00:00:00')
   
   // Çift ve Eşleşme Durumları
   const [coupleId, setCoupleId] = useState<string | null>(null)
@@ -21,19 +26,15 @@ export default function HomePage() {
   const [inviteCode, setInviteCode] = useState('')
   const [inputInviteCode, setInputInviteCode] = useState('')
 
-  // Sayaç & Günlük Altın (+15 Başlangıç, +5 Altın/Gün)
   const [duration, setDuration] = useState({ days: 0, hours: 0, minutes: 0, seconds: 0 })
   const [coins, setCoins] = useState(15)
 
-  // Titreşim Effect Durumu
   const [isVibrating, setIsVibrating] = useState(false)
   const pressTimer = useRef<any>(null)
 
-  // Veriler & Dükkan Kategorileri (Saatlik vs Haftalık)
   const [coupons, setCoupons] = useState<any[]>([])
   const [shopTab, setShopTab] = useState<'daily' | 'weekly'>('daily')
   
-  // 3 Saatlik/Günlük (Ucuz) ve 3 Haftalık (Pahalı) Kuponlar
   const dailyShopItems = [
     { id: 'd1', title: 'Tatlı Hitap Kullanımı 💕', price: 10, category: 'Saatlik / Günlük', description: 'Günün geri kalanında bana en tatlı lakaplarla seslenmek zorundasın.' },
     { id: 'd2', title: 'Tribi Anında Durdur! 🛑', price: 15, category: 'Saatlik / Günlük', description: 'O anki ufak gerginliği ve tribi tek tıkla pas geçme hakkı.' },
@@ -48,7 +49,7 @@ export default function HomePage() {
 
   const [statusMessage, setStatusMessage] = useState<string>('Seni çok özledim ❤️')
   const [notifications, setNotifications] = useState<any[]>([
-    { id: 1, text: 'İlk Eşleşme Ödülü: +15 Altın Kazanıldı! 🎉', time: 'Şimdi' }
+    { id: 1, text: 'Manitalar Uygulamasına Hoş Geldiniz! 🎉', time: 'Şimdi' }
   ])
   const [showNotifications, setShowNotifications] = useState(false)
 
@@ -61,8 +62,9 @@ export default function HomePage() {
       const { data: { session } } = await supabase.auth.getSession()
       if (session?.user) {
         setUser(session.user)
+        // Davet kodu olarak kullanıcı ID'sinin ilk 8 hanesini kullanıyoruz
         setInviteCode(session.user.id.slice(0, 8))
-        fetchUserProfile(session.user.id)
+        await fetchUserProfile(session.user.id)
       } else {
         setUser(null)
       }
@@ -71,11 +73,11 @@ export default function HomePage() {
 
     checkUser()
 
-    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user) {
         setUser(session.user)
         setInviteCode(session.user.id.slice(0, 8))
-        fetchUserProfile(session.user.id)
+        await fetchUserProfile(session.user.id)
       } else {
         setUser(null)
       }
@@ -88,44 +90,91 @@ export default function HomePage() {
   }, [])
 
   const fetchUserProfile = async (userId: string) => {
-    const { data: profile } = await supabase.from('profiles').select('couple_id').eq('id', userId).maybeSingle()
-    if (profile && profile.couple_id) {
-      setCoupleId(profile.couple_id)
-      setIsPaired(true)
+    let { data: profile } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle()
+    
+    if (!profile) {
+      // Profil yoksa oluştur
+      const { data: newProfile } = await supabase.from('profiles').insert([{ id: userId, coins: 15, couple_id: null }]).select().single()
+      profile = newProfile
+    }
+
+    if (profile) {
+      setCoins(profile.coins ?? 15)
+      if (profile.couple_id) {
+        setCoupleId(profile.couple_id)
+        setIsPaired(true)
+        // Eğer bir ortak ilişki tablosu varsa başlangıç tarihini çek
+        const { data: coupleData } = await supabase.from('couples').select('created_at').eq('id', profile.couple_id).maybeSingle()
+        if (coupleData?.created_at) {
+          setStartedAt(coupleData.created_at)
+        }
+      }
     }
   }
 
   const handleGoogleLogin = async () => {
-  await supabase.auth.signInWithOAuth({
-    provider: 'google',
-    options: { 
-      redirectTo: `${window.location.origin}`, // veya doğrudan Vercel linkin: 'https://manitalar-3.vercel.app'
-    },
-  })
-}
+    await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: `${window.location.origin}` }
+    })
+  }
 
   const handleSignOut = async () => {
     await supabase.auth.signOut()
   }
 
+  // GERÇEK EŞLEŞME MANİFESTOSU (KOD İLE EŞLEŞME)
   const handlePairWithCode = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!inputInviteCode.trim()) return
+    const code = inputInviteCode.trim()
+    if (!code) return
 
-    const targetCoupleId = inputInviteCode.trim()
-    await supabase.from('profiles').upsert({ id: user.id, couple_id: targetCoupleId })
-    setCoupleId(targetCoupleId)
+    // Karşı tarafın ID'sini bulmak için profiles tablosunda id'si bu kod ile başlayan kullanıcıyı arıyoruz
+    const { data: targetUsers, error } = await supabase
+      .from('profiles')
+      .select('id, couple_id')
+      .ilike('id', `${code}%`)
+
+    if (error || !targetUsers || targetUsers.length === 0) {
+      alert('Bu kodla eşleşen kullanıcı bulunamadı! Lütfen sevgilinin tam kodunu kontrol et.')
+      return
+    }
+
+    const targetUser = targetUsers[0]
+    if (targetUser.id === user.id) {
+      alert('Kendinle eşleşemezsin kanka! 😊')
+      return
+    }
+
+    // Ortak bir couple_id oluşturalım (ikisinin ID birleşimi)
+    const sharedCoupleId = [user.id, targetUser.id].sort().join('_')
+
+    // 1. Couples tablosuna kayıt at
+    await supabase.from('couples').upsert([{
+      id: sharedCoupleId,
+      user1_id: user.id,
+      user2_id: targetUser.id,
+      created_at: new Date().toISOString()
+    }])
+
+    // 2. Her iki kullanıcının da profilini bu couple_id ile güncelle ve +15 ödül ekle
+    await supabase.from('profiles').update({ couple_id: sharedCoupleId, coins: coins + 15 }).eq('id', user.id)
+    await supabase.from('profiles').update({ couple_id: sharedCoupleId }).eq('id', targetUser.id)
+
+    setCoupleId(sharedCoupleId)
     setIsPaired(true)
+    setCoins(prev => prev + 15)
     
-    addNotification('Tebrikler! Sevgilinle eşleştiniz ve +15 Altın kazandınız! 💕')
+    addNotification('Tebrikler! Sevgilinle başarıyla eşleştiniz ve +15 Altın kazandınız! 💕')
+    alert('Harika! Sevgilinle başarıyla eşleştiniz! 💕')
   }
 
   const copyInviteLink = () => {
-    navigator.clipboard.writeText(`${window.location.origin}/?code=${inviteCode}`)
-    alert('Davet kodu kopyalandı! Sevgiline gönderebilirsin 💌')
+    navigator.clipboard.writeText(inviteCode)
+    alert('Davet kodun kopyalandı! Sevgiline gönder 💌')
   }
 
-  // 2. SAYAÇ & GÜNLÜK ALTIN
+  // SAYAÇ
   useEffect(() => {
     const calculateTime = () => {
       const start = new Date(startedAt).getTime()
@@ -140,8 +189,6 @@ export default function HomePage() {
         minutes: Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60)),
         seconds: Math.floor((diff % (1000 * 60)) / 1000),
       })
-
-      setCoins(15 + (calculatedDays * 5))
     }
 
     calculateTime()
@@ -149,7 +196,7 @@ export default function HomePage() {
     return () => clearInterval(interval)
   }, [startedAt])
 
-  // 3. REALTIME VERİ DİNLEME
+  // REALTIME VERİ DİNLEME
   useEffect(() => {
     if (!user || !coupleId) return
 
@@ -186,12 +233,11 @@ export default function HomePage() {
     setNotifications((prev) => [{ id: Date.now(), text, time: 'Şimdi' }, ...prev])
   }
 
-  // TİTRETME MEKANİZMASI
   const handlePressStart = () => {
     pressTimer.current = setTimeout(() => {
       setIsVibrating(true)
       if (navigator.vibrate) navigator.vibrate([100, 50, 100, 50, 200])
-      addNotification('Sevgiline kalpten titreşim ve dürtme gönderildi! 💓')
+      addNotification('Sevgiline kalpten titreşim gönderildi! 💓')
       setTimeout(() => setIsVibrating(false), 1500)
     }, 500)
   }
@@ -200,7 +246,6 @@ export default function HomePage() {
     if (pressTimer.current) clearTimeout(pressTimer.current)
   }
 
-  // KUPON EKLEME & KULLANMA
   const handleAddCoupon = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newCouponTitle.trim() || !coupleId) return
@@ -233,14 +278,15 @@ export default function HomePage() {
     addNotification('Anlık widget durumu güncellendi! 📱')
   }
 
-  // DÜKKANDAN SATIN ALMA (AL KULLAN MANTIĞI - KUPONLARIMA EKLENİR)
   const handleBuyItem = async (item: any) => {
     if (coins < item.price) {
-      alert('Yetersiz Altın! Birlikte gün geçirdikçe altınların birikecek ❤️')
+      alert('Yetersiz Altın! Birlikte zaman geçirdikçe altınların birikecek ❤️')
       return
     }
 
-    setCoins((prev) => prev - item.price)
+    const newCoins = coins - item.price
+    setCoins(newCoins)
+    await supabase.from('profiles').update({ coins: newCoins }).eq('id', user.id)
 
     if (coupleId) {
       const { data } = await supabase
@@ -251,14 +297,10 @@ export default function HomePage() {
       if (data) {
         setCoupons((prev) => [data[0], ...prev])
       }
-    } else {
-      // Offline / Test Modu
-      const newLocalCoupon = { id: Date.now().toString(), title: item.title, cost: item.price, status: 'available' }
-      setCoupons((prev) => [newLocalCoupon, ...prev])
     }
 
     addNotification(`Satın Alındı: "${item.title}" (Kuponlarıma Eklendi) 🛍️`)
-    alert(`Tebrikler! "${item.title}" satın alındı. İstediğin an "Kuponlar" sekmesinden kullanabilirsin! 🎉`)
+    alert(`Tebrikler! "${item.title}" satın alındı. "Kuponlar" sekmesinden kullanabilirsin! 🎉`)
   }
 
   if (loading) {
@@ -305,16 +347,6 @@ export default function HomePage() {
           </div>
           <h2 className="text-xl font-bold text-gray-800 mb-1">Sevgilinle Eşleş 💕</h2>
           <p className="text-xs text-gray-500 mb-4">Eşleştiğiniz an **+15 Altın** kazanacaksınız!</p>
-
-          <button 
-            onClick={() => {
-              setCoupleId(user?.id || 'demo-couple-id')
-              setIsPaired(true)
-            }}
-            className="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs py-2.5 px-3 rounded-xl mb-4 transition shadow-sm flex items-center justify-center gap-1.5"
-          >
-            ⚡ Test Modu: Eşleşmeyi Atla & +15 Altın Al
-          </button>
 
           <div className="bg-pink-50 p-3 rounded-2xl border border-pink-100 mb-4">
             <span className="text-[10px] text-pink-500 font-semibold block mb-1">SENİN DAVET KODUN</span>
@@ -409,7 +441,7 @@ export default function HomePage() {
       {/* ANA İÇERİK */}
       <main className="w-full max-w-md flex-1 bg-white rounded-3xl shadow-lg border border-pink-100 p-5 mb-20 flex flex-col relative overflow-hidden">
         
-        {/* ORTAK ODA (TİTREŞİM VE TİTRETME) */}
+        {/* ORTAK ODA */}
         {activeTab === 'room' && (
           <div className="flex-1 flex flex-col items-center justify-center text-center p-2">
             <p className="text-[11px] text-pink-500 font-bold mb-2 uppercase tracking-wider">Sevgilini Titretmek İçin Basılı Tut 👇</p>
@@ -430,13 +462,13 @@ export default function HomePage() {
             
             <div className="w-full bg-pink-50 border border-pink-100 rounded-2xl p-3.5 text-left space-y-2">
               <div className="flex justify-between text-xs"><span className="text-gray-500">Durum:</span><span className="font-bold text-green-600 flex items-center gap-1"><ShieldCheck size={14}/> Eşleşme Aktif</span></div>
-              <div className="flex justify-between text-xs"><span className="text-gray-500">Kazanılan Günlük Altın:</span><span className="font-bold text-amber-600">+5 Altın / Gün</span></div>
+              <div className="flex justify-between text-xs"><span className="text-gray-500">Davet Kodun:</span><span className="font-bold font-mono text-pink-600">{inviteCode}</span></div>
               <div className="flex justify-between text-xs"><span className="text-gray-500">Birlikte Geçen Süre:</span><span className="font-bold text-pink-600">{duration.days} Gün {duration.hours} Sa</span></div>
             </div>
           </div>
         )}
 
-        {/* KUPONLARIM SEKME HAREKETİ VE KULLANMA */}
+        {/* KUPONLARIM */}
         {activeTab === 'coupons' && (
           <div className="flex-1 flex flex-col">
             <h2 className="font-bold text-lg text-gray-700 mb-1">Aşk Kuponları 🎟️</h2>
@@ -470,13 +502,12 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* SAATLİK / HAFTALIK VE 3'ERLİ DÜKKAN */}
+        {/* DÜKKAN */}
         {activeTab === 'shop' && (
           <div className="flex-1 flex flex-col">
             <h2 className="font-bold text-lg text-gray-700 mb-1">Aşk Dükkanı 🛍️</h2>
             <p className="text-xs text-gray-400 mb-3">Altınlarınla sürpriz kuponlar satın al.</p>
             
-            {/* Saatlik/Günlük ve Haftalık Tab Seçimi */}
             <div className="flex gap-2 mb-3 bg-gray-100 p-1 rounded-2xl">
               <button
                 onClick={() => setShopTab('daily')}
@@ -496,7 +527,6 @@ export default function HomePage() {
               </button>
             </div>
 
-            {/* ÜRÜNLER LİSTESİ */}
             <div className="space-y-3 flex-1 overflow-y-auto pr-1">
               {(shopTab === 'daily' ? dailyShopItems : weeklyShopItems).map((item) => (
                 <div key={item.id} className="p-3.5 rounded-2xl bg-gradient-to-r from-pink-50/80 to-purple-50/80 border border-pink-100 flex flex-col justify-between gap-2">
